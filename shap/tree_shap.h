@@ -1439,7 +1439,7 @@ void dense_tree_interactions_path_dependent(const TreeEnsemble& trees, const Exp
 					for (unsigned l = 0; l < contrib_row_size; ++l) {
 						const tfloat val = (on_contribs[l] - off_contribs[l]);
 						instance_out_contribs[l] += val / 2; // only add half to i,j because the other half should be in element j,i
-						diag_contribs[l] -= val; // subtract the full amount since the other half won't be subtracted by the other feature
+						diag_contribs[l] -= 2 * val; // subtract the full amount since the other half won't be subtracted by the other feature
 					}
 				}
 			}
