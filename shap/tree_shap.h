@@ -1532,7 +1532,7 @@ void dense_tree_shap(const TreeEnsemble& trees, const ExplanationDataset &data, 
             return;
         
         case FEATURE_DEPENDENCE::tree_path_dependent:
-            if (interactions) dense_tree_interactions_path_dependent(trees, data, out_contribs, transform);
+            if (interactions) dense_tree_interactions_path_dependent(trees, data, out_contribs, transform, feature_ind);
             else dense_tree_path_dependent(trees, data, out_contribs, transform);
             return;
 
