@@ -329,8 +329,8 @@ class TreeExplainer(Explainer):
 
         # shortcut using the C++ version of Tree SHAP in XGBoost
         if self.model.model_type == "xgboost" and feature_ind < 0:
-            assert_import("xgboost")
-            if not str(type(X)).endswith("xgboost.core.DMatrix'>"):
+            import xgboost
+            if not isinstance(X, xgboost.core.DMatrix):
                 X = xgboost.DMatrix(X)
             if tree_limit == -1:
                 tree_limit = 0
@@ -345,18 +345,18 @@ class TreeExplainer(Explainer):
                 return phi[:, :-1, :-1]
 
         # convert dataframes
-        if str(type(X)).endswith("pandas.core.series.Series'>"):
+        if safe_isinstance(X, "pandas.core.series.Series"):
             X = X.values
-        elif str(type(X)).endswith("pandas.core.frame.DataFrame'>"):
+        elif safe_isinstance(X, "pandas.core.frame.DataFrame"):
             X = X.values
         flat_output = False
         if len(X.shape) == 1:
             flat_output = True
             X = X.reshape(1, X.shape[0])
-        if X.dtype != self.model.dtype:
-            X = X.astype(self.model.dtype)
+        if X.dtype != self.model.input_dtype:
+            X = X.astype(self.model.input_dtype)
         X_missing = np.isnan(X, dtype=np.bool)
-        assert str(type(X)).endswith("'numpy.ndarray'>"), "Unknown instance type: " + str(type(X))
+        assert isinstance(X, np.ndarray), "Unknown instance type: " + str(type(X))
         assert len(X.shape) == 2, "Passed input data matrix X must have 1 or 2 dimensions!"
 
         if tree_limit < 0 or tree_limit > self.model.values.shape[0]:
