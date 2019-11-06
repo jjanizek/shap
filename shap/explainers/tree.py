@@ -286,21 +286,21 @@ class TreeExplainer(Explainer):
 
         return out
 
-    def shap_interaction_values(self, X, y=None, tree_limit=None):
+    def shap_interaction_values(self, X, y=None, tree_limit=None, feature_ind=None):
         """ Estimate the SHAP interaction values for a set of samples.
-
         Parameters
         ----------
         X : numpy.array, pandas.DataFrame or catboost.Pool (for catboost)
             A matrix of samples (# samples x # features) on which to explain the model's output.
-
         y : numpy.array
             An array of label values for each sample. Used when explaining loss functions (not yet supported).
-
         tree_limit : None (default) or int 
             Limit the number of trees used by the model. By default None means no use the limit of the
             original model, and -1 means no limit.
-
+            
+        feature_ind : None (default) or int
+            Get interaction values for only a single feature. By default None will get interactions for
+            all features, otherwise will get all interactions with the feature at the given index.
         Returns
         -------
         For models with a single output this returns a tensor of SHAP values
@@ -310,7 +310,9 @@ class TreeExplainer(Explainer):
         SHAP value for that feature for that sample. The diagonal entries of the matrix represent the
         "main effect" of that feature on the prediction and the symmetric off-diagonal entries represent the
         interaction effects between all pairs of features for that sample. For models with vector outputs
-        this returns a list of tensors, one for each output.
+        this returns a list of tensors, one for each output. If a single feature index is given, this will
+        calculate and return only the interactions for that feature [one row of the (# features x # features)
+        matrix for each sample], and therefore returns a matrix overall that is (# samples x # features).
         """
 
         assert self.model_output == "margin", "Only model_output = \"margin\" is supported for SHAP interaction values right now!"
@@ -320,11 +322,15 @@ class TreeExplainer(Explainer):
         # see if we have a default tree_limit in place.
         if tree_limit is None:
             tree_limit = -1 if self.model.tree_limit is None else self.model.tree_limit
+            
+        # see if we are explaining a single feature
+        if feature_ind is None:
+            feature_ind = -1
 
         # shortcut using the C++ version of Tree SHAP in XGBoost
-        if self.model.model_type == "xgboost":
-            import xgboost
-            if not isinstance(X, xgboost.core.DMatrix):
+        if self.model.model_type == "xgboost" and feature_ind < 0:
+            assert_import("xgboost")
+            if not str(type(X)).endswith("xgboost.core.DMatrix'>"):
                 X = xgboost.DMatrix(X)
             if tree_limit == -1:
                 tree_limit = 0
@@ -339,18 +345,18 @@ class TreeExplainer(Explainer):
                 return phi[:, :-1, :-1]
 
         # convert dataframes
-        if safe_isinstance(X, "pandas.core.series.Series"):
+        if str(type(X)).endswith("pandas.core.series.Series'>"):
             X = X.values
-        elif safe_isinstance(X, "pandas.core.frame.DataFrame"):
+        elif str(type(X)).endswith("pandas.core.frame.DataFrame'>"):
             X = X.values
         flat_output = False
         if len(X.shape) == 1:
             flat_output = True
             X = X.reshape(1, X.shape[0])
-        if X.dtype != self.model.input_dtype:
-            X = X.astype(self.model.input_dtype)
+        if X.dtype != self.model.dtype:
+            X = X.astype(self.model.dtype)
         X_missing = np.isnan(X, dtype=np.bool)
-        assert isinstance(X, np.ndarray), "Unknown instance type: " + str(type(X))
+        assert str(type(X)).endswith("'numpy.ndarray'>"), "Unknown instance type: " + str(type(X))
         assert len(X.shape) == 2, "Passed input data matrix X must have 1 or 2 dimensions!"
 
         if tree_limit < 0 or tree_limit > self.model.values.shape[0]:
@@ -358,29 +364,47 @@ class TreeExplainer(Explainer):
 
         # run the core algorithm using the C extension
         assert_import("cext")
-        phi = np.zeros((X.shape[0], X.shape[1]+1, X.shape[1]+1, self.model.n_outputs))
+        if feature_ind < 0:
+            phi = np.zeros((X.shape[0], X.shape[1]+1, X.shape[1]+1, self.model.n_outputs))
+        else:
+            phi = np.zeros((X.shape[0], X.shape[1]+1, self.model.n_outputs))
+            
         _cext.dense_tree_shap(
             self.model.children_left, self.model.children_right, self.model.children_default,
             self.model.features, self.model.thresholds, self.model.values, self.model.node_sample_weight,
             self.model.max_depth, X, X_missing, y, self.data, self.data_missing, tree_limit,
             self.model.base_offset, phi, feature_dependence_codes[self.feature_dependence],
-            output_transform_codes[transform], True
+            output_transform_codes[transform], True, feature_ind
         )
 
         # note we pull off the last column and keep it as our expected_value
-        if self.model.n_outputs == 1:
-            self.expected_value = phi[0, -1, -1, 0]
-            if flat_output:
-                out = phi[0, :-1, :-1, 0]
+        if feature_ind < 0:
+            if self.model.n_outputs == 1:
+                self.expected_value = phi[0, -1, -1, 0]
+                if flat_output:
+                    out = phi[0, :-1, :-1, 0]
+                else:
+                    out = phi[:, :-1, :-1, 0]
             else:
-                out = phi[:, :-1, :-1, 0]
+                self.expected_value = [phi[0, -1, -1, i] for i in range(phi.shape[3])]
+                if flat_output:
+                    out = [phi[0, :-1, :-1, i] for i in range(self.model.n_outputs)]
+                else:
+                    out = [phi[:, :-1, :-1, i] for i in range(self.model.n_outputs)]
         else:
-            self.expected_value = [phi[0, -1, -1, i] for i in range(phi.shape[3])]
-            if flat_output:
-                out = [phi[0, :-1, :-1, i] for i in range(self.model.n_outputs)]
+            if self.model.n_outputs == 1:
+                self.expected_value = phi[0, -1, 0]
+                if flat_output:
+                    out = phi[0, :-1, 0]
+                else:
+                    out = phi[:, :-1, 0]
             else:
-                out = [phi[:, :-1, :-1, i] for i in range(self.model.n_outputs)]
-        
+                self.expected_value = [phi[0, -1, i] for i in range(phi.shape[2])]
+                if flat_output:
+                    out = [phi[0, :-1, i] for i in range(self.model.n_outputs)]
+                else:
+                    out = [phi[:, :-1, i] for i in range(self.model.n_outputs)]
+    
         return out
 
     def assert_additivity(self, phi, model_output):
